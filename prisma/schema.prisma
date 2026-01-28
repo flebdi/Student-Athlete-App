@@ -1,0 +1,263 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// --------------------------------------
+// User & Profile
+// --------------------------------------
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  passwordHash  String?
+  name          String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // 1:1 Profile
+  athleteProfile AthleteProfile?
+
+  // Relationships
+  semesters      Semester[]
+  constraints    Constraint[]
+  goals          Goal[]
+  eventTemplates EventTemplate[]
+  schedulePlans  SchedulePlan[]
+  events         Event[]
+}
+
+model AthleteProfile {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sport       String
+  position    String?
+  schoolYear  SchoolYear // ENUM
+  jerseyNumber Int?
+  
+  // Biometrics field implies sensitive data - treat carefully
+  heightCm    Float?
+  weightKg    Float?
+}
+
+// --------------------------------------
+// Academic Context
+// --------------------------------------
+
+model Semester {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String   // "Fall 2024"
+  startDate DateTime
+  endDate   DateTime
+  
+  courses   Course[]
+}
+
+model Course {
+  id         String   @id @default(cuid())
+  semesterId String
+  semester   Semester @relation(fields: [semesterId], references: [id], onDelete: Cascade)
+  
+  name       String   // "Intro to Psychology"
+  code       String   // "PSY101"
+  color      String   // Hex code for UI
+  credits    Int      @default(3)
+  
+  assignments Assignment[]
+  events      Event[] // Linked class sessions or study blocks
+}
+
+model Assignment {
+  id          String   @id @default(cuid())
+  courseId    String
+  course      Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  
+  title       String
+  dueDate     DateTime
+  estimatedTimeMinutes Int?
+  status      AssignmentStatus @default(PENDING)
+  
+  // Can link to specific study blocks
+  studyEvents Event[]
+}
+
+// --------------------------------------
+// Scheduling Core
+// --------------------------------------
+
+model Event {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  title       String
+  description String?
+  location    String?
+  
+  startTime   DateTime
+  endTime     DateTime
+  
+  // Visuals & Categorization
+  category    EventCategory
+  color       String? // Override default category color
+  
+  // Logic
+  isAllDay    Boolean @default(false)
+  isLocked    Boolean @default(false) // If true, auto-scheduler won't move it
+  
+  // Origin tracking
+  origin      EventOrigin @default(USER_CREATED)
+  
+  // Recurrence
+  recurrenceRule String? // iCal RRULE string (e.g. "FREQ=WEEKLY;BYDAY=MO,WE,FR")
+  parentEventId  String? // For detached instances of a recurring series
+  parentEvent    Event?  @relation("Recurrence", fields: [parentEventId], references: [id])
+  childEvents    Event[] @relation("Recurrence")
+  
+  // Relations (Polymorphic-ish)
+  courseId     String?
+  course       Course?     @relation(fields: [courseId], references: [id])
+  
+  assignmentId String?
+  assignment   Assignment? @relation(fields: [assignmentId], references: [id])
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@index([userId, startTime])
+}
+
+model SchedulePlan {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  weekStartDate DateTime
+  status        PlanStatus @default(DRAFT)
+  score         Int?       // Calculated "balance score"
+  
+  metadata      Json?      // Store analysis data (total study hours, sleep avg)
+  
+  createdAt     DateTime   @default(now())
+}
+
+model EventTemplate {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  name        String   // "Away Game Day", "Heavy Practice"
+  blocks      Json     // Array of logic: { offset: 0, duration: 60, category: 'MEAL', title: 'Breakfast' }
+}
+
+model Constraint {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  type        ConstraintType
+  value       Json     // { min: 8, unit: "hours" } or { start: "22:00", end: "06:00" }
+  priority    Int      @default(1) // 1=High (Hard), 2=Medium (Warning), 3=Low (Info)
+  isActive    Boolean  @default(true)
+}
+
+// --------------------------------------
+// Goals & Analytics
+// --------------------------------------
+
+model Goal {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  title       String
+  category    GoalCategory
+  targetValue Float
+  currentValue Float   @default(0)
+  unit        String   // "hours", "gpa", "sessions"
+  deadline    DateTime?
+  
+  checkins    GoalCheckin[]
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model GoalCheckin {
+  id        String   @id @default(cuid())
+  goalId    String
+  goal      Goal     @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  
+  value     Float
+  note      String?
+  date      DateTime @default(now())
+}
+
+// --------------------------------------
+// Enums
+// --------------------------------------
+
+enum SchoolYear {
+  FRESHMAN
+  SOPHOMORE
+  JUNIOR
+  SENIOR
+  GRAD_STUDENT
+}
+
+enum EventCategory {
+  CLASS
+  PRACTICE
+  GAME
+  MEAL
+  STUDY
+  SLEEP
+  TRAVEL
+  RECOVERY
+  SOCIAL
+  OTHER
+}
+
+enum EventOrigin {
+  USER_CREATED   // Manually added
+  GENERATED      // Created by smart scheduler
+  IMPORTED       // From external calendar
+  TEMPLATE       // Applied from template
+}
+
+enum AssignmentStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  LATE
+}
+
+enum PlanStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+enum ConstraintType {
+  SLEEP_WINDOW
+  TRAVEL_BUFFER
+  MAX_STUDY_SESSION
+  MEAL_WINDOW
+  MIN_RECOVERY
+}
+
+enum GoalCategory {
+  ACADEMIC
+  ATHLETIC
+  WELLNESS
+}
